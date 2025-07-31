@@ -1,3 +1,29 @@
+# Masked Splat-SLAM
+
+## Example result in KITTI
+<img src="output/KITTI/2011_09_26_drive_0091_sync/plots_after_refine/output.gif" alt="KITTI/" width="800" height="150">
+
+## Preliminary
+You need to prepare mask images for given datasets.
+
+In KITTI dataset, please refer to https://github.com/ziyc/drivestudio
+
+## Execute
+```
+CUDA_LAUNCH_BLOCKING=1 python run-kitti-masked.py \
+  configs/KITTI/2011_09_26_drive_0091_sync.yaml
+```
+
+## Reference
+- https://github.com/google-research/Splat-SLAM
+- https://github.com/yufu-wang/tram/tree/main
+- https://github.com/ziyc/drivestudio
+
+<br>
+<br>
+<br>
+
+
 <!-- PROJECT LOGO -->
   <h1 align="center"><img src="./media/splat.png" alt="logo" width=60>Splat-SLAM: Globally Optimized RGB-only SLAM with 3D Gaussians</h1>
   <p align="center">
