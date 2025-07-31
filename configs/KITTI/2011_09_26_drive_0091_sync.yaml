@@ -1,0 +1,12 @@
+inherit_from: ./configs/KITTI/kitti.yaml
+scene: 2011_09_26_drive_0091_sync
+data:
+  input_folder: 2011_09_26_drive_0091_sync
+  output: output/KITTI
+cam:
+  H: 187
+  W: 621
+  fx: 360.7689
+  fy: 359.8068
+  cx: 304.7797
+  cy: 86.1965

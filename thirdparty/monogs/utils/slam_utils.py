@@ -6,6 +6,10 @@
 import torch
 from thirdparty.gaussian_splatting.utils.loss_utils import ssim
 
+import cv2
+import numpy as np
+from torchvision.transforms import Resize
+
 
 def image_gradient(image):
     # Compute image gradient using Scharr Filter
@@ -84,6 +88,10 @@ def get_loss_mapping_rgbd(config, image, depth, viewpoint, initialization=False)
     _, h, w = gt_image.shape
     mask_shape = (1, h, w)
 
+    mask = viewpoint.mask
+    if mask is not None:
+        mask = mask.cuda()
+
     gt_depth = torch.from_numpy(viewpoint.depth).to(
         dtype=torch.float32, device=image.device
     )[None]
@@ -92,6 +100,9 @@ def get_loss_mapping_rgbd(config, image, depth, viewpoint, initialization=False)
         ssim_loss = 1.0 - ssim(image, gt_image)
         
     rgb_pixel_mask = (gt_image.sum(dim=0) > rgb_boundary_threshold).view(*mask_shape)
+    if mask is not None:
+        rgb_pixel_mask = torch.logical_and(rgb_pixel_mask, mask > 0.5)
+    
     l1_rgb = torch.abs(image * rgb_pixel_mask - gt_image * rgb_pixel_mask)
     if config["Training"]["ssim_loss"]:
         hyperparameter = config["opt_params"]["lambda_dssim"]
@@ -100,6 +111,8 @@ def get_loss_mapping_rgbd(config, image, depth, viewpoint, initialization=False)
         loss += l1_rgb
 
     depth_pixel_mask = (gt_depth > 0.01).view(*depth.shape)
+    if mask is not None:
+        depth_pixel_mask = torch.logical_and(depth_pixel_mask, mask > 0.5)
     l1_depth = torch.abs(depth * depth_pixel_mask - gt_depth * depth_pixel_mask)
 
     return alpha * loss.mean() + (1 - alpha) * l1_depth.mean()
@@ -117,3 +130,67 @@ def get_median_depth(depth, opacity=None, mask=None, return_std=False):
     if return_std:
         return valid_depth.median(), valid_depth.std(), valid
     return valid_depth.median()
+
+
+def get_dimension(image, down_scale=8):
+    h0, w0, _ = image.shape
+    h1 = int(h0 * np.sqrt((384 * 512) / (h0 * w0)))
+    w1 = int(w0 * np.sqrt((384 * 512) / (h0 * w0)))
+
+    H, W, _ = cv2.resize(image, (w1, h1))[:h1-h1%down_scale, :w1-w1%down_scale].shape
+    return H, W
+
+def get_dimension_from_file(imgfile, down_scale=8):
+    """ Get proper image dimension for DROID """
+    image = cv2.imread(imgfile)
+    return get_dimension(image, down_scale)
+
+# def preprocess_masks(image, mask):
+#     """ Resize masks for masked droid """
+#     H, W = get_dimention(image)
+#     resize_1 = Resize((H, W), antialias=True)
+#     resize_2 = Resize((H//8, W//8), antialias=True)
+    
+#     img_msks = []
+#     for i in range(0, len(masks), 500):
+#         m = resize_1(masks[i:i+500])
+#         img_msks.append(m)
+#     img_msks = torch.cat(img_msks)
+
+#     conf_msks = []
+#     for i in range(0, len(masks), 500):
+#         m = resize_2(masks[i:i+500])
+#         conf_msks.append(m)
+#     conf_msks = torch.cat(conf_msks)
+
+#     return img_msks, conf_msks
+# def preprocess_mask(image, mask, down_scale=8):
+#     """ Resize masks for masked droid """
+#     print(image.shape)
+#     H, W = get_dimension(image)
+#     resize_1 = Resize((H, W), antialias=True)
+#     resize_2 = Resize((H//down_scale, W//down_scale), antialias=True)
+    
+#     img_msk = resize_1(mask.unsqueeze(0))
+#     conf_msk = resize_2(mask.unsqueeze(0))
+
+#     return img_msk, conf_msk
+def preprocess_mask(mask, H, W, down_scale=8):
+    """ Resize masks for masked droid """
+    resize_1 = Resize((H, W), antialias=True)
+    resize_2 = Resize((H//down_scale, W//down_scale), antialias=True)
+    
+    img_msk = resize_1(mask.unsqueeze(0))
+    conf_msk = resize_2(mask.unsqueeze(0))
+
+#     img_msk = 1.0 - img_msk
+#     conf_msk = 1.0 - conf_msk # to mask out droid weight
+# #     img_msk = img_msk > 0.5 # binary
+# #     conf_msk = conf_msk > 0.5
+    
+    img_msk = img_msk < 0.5 # binary: float -> bool, produce human=1, bg=0
+    conf_msk = conf_msk < 0.5
+    
+    return img_msk, conf_msk
+
+

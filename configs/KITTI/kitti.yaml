@@ -12,14 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-dataset: 'tumrgbd'
+dataset: 'kitti'
 
 mapping:
   Calibration:
     depth_scale: 5000.0
+#   final_refine_iters: 1000 # iterations of final refinement
 
 tracking:
-  buffer: 600
+#   buffer: 600
+  buffer: 1000
   warmup: 12
   multiview_filter:
     visible_num: 2  
@@ -30,6 +32,7 @@ tracking:
     loop_nms: 10
     BA_type: "DBA"
     normalize: False
+  upsample: True ##
 
 cam:  #NOTE: intrinsic is different per scene in TUM
   # refer to https://vision.in.tum.de/data/datasets/rgbd-dataset/file_formats#intrinsic_camera_calibration_of_the_kinect
@@ -41,5 +44,18 @@ cam:  #NOTE: intrinsic is different per scene in TUM
   W_out: 512
 
 data:
-  dataset_root: datasets/TUM_RGBD
-  output: output/TUM_RGBD
+  # dataset_root: /root/data_sumi/HumanPose/EMDB/
+  # output: output/EMDB
+  dataset_root: /root/sumi/sumi_repository/gaussian_splatting/_AD/drivestudio/data/kitti/processed/
+  output: output/KITTI
+
+##
+meshing:
+  mesh: False # without depth_gt, too large to discretize
+  mesh_before_final_ba: False
+  gt_mesh_path: ''
+
+##
+plot:
+#   plot_axis: "xy"
+  plot_axis: "xz"

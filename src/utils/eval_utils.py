@@ -78,13 +78,23 @@ def eval_rendering(
         saved_frame_idx.append(video_idx)
         frame = frames[video_idx]
        
-        _, gt_image, gt_depth, _= dataset[kf_idx]
-        gt_depth = gt_depth.cpu().numpy()
+        # _, gt_image, gt_depth, _ = dataset[kf_idx]
+        frame_data = dataset[kf_idx]
+        if len(frame_data) < 5:
+            _, gt_image, gt_depth, _ = frame_data
+        else:
+            _, gt_image, gt_depth, _, color_mask = frame_data
+            if color_mask is not None:
+                color_mask = color_mask.to("cuda:0")
+        
         gt_image = gt_image.squeeze().to("cuda:0")
+        if gt_depth is not None:
+            gt_depth = gt_depth.cpu().numpy()
+            gt_depth = torch.tensor(gt_depth)
         # retrieve mono depth
         mono_depth = load_mono_depth(kf_idx, save_dir).to("cuda:0")
         # retrieve sensor 
-        sensor_depth, _, invalid = mapper.get_w2c_and_depth(video_idx, kf_idx, mono_depth, gt_depth, init=False)
+        sensor_depth, _, invalid = mapper.get_w2c_and_depth(video_idx, kf_idx, mono_depth, init=False)
         sensor_depth = sensor_depth.cpu()
 
         rendering_pkg = render(frame, gaussians, pipe, background)
@@ -107,18 +117,23 @@ def eval_rendering(
         img_gt.append(gt)
 
         mask = gt_image > 0 
-
-        gt_depth = torch.tensor(gt_depth)
+        if color_mask is not None:
+            mask = torch.logical_and(mask, color_mask > 0.5 )
+        
         depth = depth.detach().cpu()
         
-
         # compute depth errors
-        depth_mask = (depth > 0) * (gt_depth > 0)
-        depth = global_scale*depth
-        diff_depth_l1 = torch.abs(depth - gt_depth)
-        diff_depth_l1_gt = diff_depth_l1 * depth_mask
-        depth_l1_gt = diff_depth_l1_gt.sum() / depth_mask.sum()
-        depth_l1_array.append(depth_l1_gt)
+        if gt_depth is not None:
+            depth_mask = (depth > 0) * (gt_depth > 0)
+            depth = global_scale*depth
+            diff_depth_l1 = torch.abs(depth - gt_depth)
+            diff_depth_l1_gt = diff_depth_l1 * depth_mask
+            depth_l1_gt = diff_depth_l1_gt.sum() / depth_mask.sum()
+            depth_l1_array.append(depth_l1_gt)
+        else:
+            diff_depth_l1_gt = None
+            depth_l1_gt = None
+            depth_l1_array = None
 
         psnr_score = psnr((image[mask]).unsqueeze(0), (gt_image[mask]).unsqueeze(0))
         ssim_score = ssim((image).unsqueeze(0), (gt_image).unsqueeze(0))
@@ -136,8 +151,9 @@ def eval_rendering(
 
         # do volumetric TSDF fusion from which the mesh will be extracted later
         if mesh:
-            # mask out the pixels where the GT mesh is non-existent. Do this with the gt depth mask
-            depth[gt_depth.unsqueeze(0) == 0] = 0
+            if gt_depth is not None:
+                # mask out the pixels where the GT mesh is non-existent. Do this with the gt depth mask
+                depth[gt_depth.unsqueeze(0) == 0] = 0
             depth_o3d = np.ascontiguousarray(depth.permute(1, 2, 0).numpy().astype(np.float32))
             depth_o3d = o3d.geometry.Image(depth_o3d)
             color_o3d = np.ascontiguousarray((np.clip(image.permute(1, 2, 0).cpu().numpy(), 0.0, 1.0)*255.0).astype(np.uint8))
@@ -191,7 +207,10 @@ def eval_rendering(
     output["mean_ssim"] = float(np.mean(ssim_array))
     output["mean_lpips"] = float(np.mean(lpips_array))
     # rendering depth l1 error
-    output["mean_depthl1"] = float(np.mean(depth_l1_array)) 
+    if depth_l1_array is not None:
+        output["mean_depthl1"] = float(np.mean(depth_l1_array)) 
+    else:
+        output["mean_depthl1"] = None
 
     print(
         f'mean psnr: {output["mean_psnr"]}, ssim: {output["mean_ssim"]}, lpips: {output["mean_lpips"]}, depth l1: {output["mean_depthl1"]}', #, depth l1 sensor: {output["mean_depthl1_sensor"]}, depth l1 to sensor: {output["mean_depthl1_to_sensor"]}', 
@@ -241,20 +260,23 @@ def plot_rgbd_silhouette(color, depth, rastered_color, rastered_depth, diff_dept
         fig, axs = plt.subplots(2, 3, figsize=(fig_width, fig_height))
     axs[0, 0].imshow(color.cpu().permute(1, 2, 0))
     axs[0, 0].set_title("Ground Truth RGB")
-    axs[0, 1].imshow(depth, cmap='jet', vmin=0, vmax=depth_max)
+    if depth is not None:
+        axs[0, 1].imshow(depth, cmap='jet', vmin=0, vmax=depth_max)
     axs[0, 1].set_title("Input Depth")
     rastered_color = torch.clamp(rastered_color, 0, 1)
     axs[1, 0].imshow(rastered_color.cpu().permute(1, 2, 0))
     axs[1, 0].set_title("Rasterized RGB, PSNR: {:.2f}".format(psnr))
     axs[1, 1].imshow(rastered_depth[0, :, :].cpu(), cmap='jet', vmin=0, vmax=depth_max)
-    axs[1, 1].set_title("Rasterized Depth, L1: {:.2f}".format(depth_l1))
+    if depth is not None:
+        axs[1, 1].set_title("Rasterized Depth, L1: {:.2f}".format(depth_l1))
     if diff_rgb is not None:
         axs[0, 2].imshow(diff_rgb, cmap='jet', vmin=0, vmax=diff_rgb.max())
         axs[0, 2].set_title("Diff RGB L1")
-    diff_depth_l1 = diff_depth_l1.cpu().squeeze(0)
-    axs[1, 2].imshow(diff_depth_l1, cmap='jet', vmin=0, vmax=diff_depth_l1.max())
-    axs[1, 2].set_title("Diff Depth L1")
-
+    if depth is not None:
+        diff_depth_l1 = diff_depth_l1.cpu().squeeze(0)
+        axs[1, 2].imshow(diff_depth_l1, cmap='jet', vmin=0, vmax=diff_depth_l1.max())
+        axs[1, 2].set_title("Diff Depth L1")
+    
     if opacities is not None:
         axs[0, 3].hist(opacities, bins=50, range=(0,1))
         axs[0, 3].set_title('Histogram of Opacities')

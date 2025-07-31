@@ -26,6 +26,7 @@ class Camera(nn.Module):
         fovy,
         image_height,
         image_width,
+        mask=None,
         device="cuda:0",
     ):
         super(Camera, self).__init__()
@@ -42,6 +43,8 @@ class Camera(nn.Module):
         self.original_image = color
         self.depth = depth
         self.grad_mask = None
+        
+        self.mask = mask
 
         self.fx = fx
         self.fy = fy
@@ -88,6 +91,7 @@ class Camera(nn.Module):
             dataset.fovy,
             dataset.H_out,
             dataset.W_out,
+            data["mask"],
             device=dataset.device,
         )
 
@@ -140,6 +144,8 @@ class Camera(nn.Module):
         self.original_image = None
         self.depth = None
         self.grad_mask = None
+        
+        self.mask = None
 
         self.cam_rot_delta = None
         self.cam_trans_delta = None

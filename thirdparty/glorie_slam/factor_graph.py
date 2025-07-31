@@ -22,12 +22,14 @@ from copy import deepcopy
 
 class FactorGraph:
     # mainly inherited from GO-SLAM
-    def __init__(self, video, update_op, device="cuda:0", corr_impl="volume", max_factors=-1):
+    def __init__(self, video, update_op, device="cuda:0", corr_impl="volume", max_factors=-1, upsample=True):
         self.video = video
         self.update_op = update_op
         self.device = device
         self.max_factors = max_factors
         self.corr_impl = corr_impl
+        
+        self.upsample = upsample ##
 
         # operator at 1/8 resolution
         self.ht = ht = video.ht // self.video.down_scale
@@ -53,6 +55,21 @@ class FactorGraph:
         self.target_inac = torch.zeros([1, 0, ht, wd, 2], device=device, dtype=torch.float)
         self.weight_inac = torch.zeros([1, 0, ht, wd, 2], device=device, dtype=torch.float)
 
+    def save_factors(self, output_path, device="cpu"):
+        torch.save({
+#             "corr": self.corr.to(device) if self.corr is not None else None,
+            "ii": self.ii.to(device),
+            "jj": self.jj.to(device),
+            "weight": self.weight.to(device),
+            "target": self.target_inac.to(device),
+            "ii_inac": self.ii_inac.to(device),
+            "jj_inac": self.jj_inac.to(device),
+            "ii_bad": self.ii_bad.to(device),
+            "jj_bad": self.jj_bad.to(device),
+            "target_inac": self.target_inac.to(device),
+            "weight_inac": self.weight_inac.to(device),
+            }, output_path)
+        
     def __filter_repeated_edges(self, ii, jj):
         """ remove duplicate edges """
 
@@ -205,6 +222,9 @@ class FactorGraph:
             self.video.nets[ix] = self.video.nets[ix+1]
             self.video.inps[ix] = self.video.inps[ix+1]
             self.video.fmaps[ix] = self.video.fmaps[ix+1]
+            
+            self.video.masks_small[ix] = self.video.masks_small[ix+1] ##
+            self.video.masks[ix] = self.video.masks[ix+1] ##
 
         m = (self.ii_inac == ix) | (self.jj_inac == ix)
         self.ii_inac[self.ii_inac >= ix] -= 1
@@ -240,6 +260,11 @@ class FactorGraph:
         self.net, delta, weight, damping, upmask = \
             self.update_op(self.net, self.inp, corr, motn, self.ii, self.jj)
 
+        ##
+#         msk = self.video.masks[self.ii] > 0
+        msk = self.video.masks_small[self.ii]
+        weight[:,msk] = 0.0
+        
         if t0 is None:
             t0 = max(1, self.ii.min().item()+1)
 
@@ -265,7 +290,8 @@ class FactorGraph:
             self.video.ba(target, weight, damping, ii, jj, t0, t1, 
                 iters=itrs, lm=1e-4, ep=0.1, motion_only=motion_only,opt_type=opt_type)
         
-            self.video.upsample(torch.unique(self.ii), upmask)
+            if self.upsample:
+                self.video.upsample(torch.unique(self.ii), upmask)
 
         self.age += 1
 
@@ -301,8 +327,14 @@ class FactorGraph:
                  
                     net, delta, weight, damping, upmask = \
                         self.update_op(self.net[:,v], self.video.inps[None,iis], corr1, motn[:,v], iis, jjs)
-                    self.video.upsample(torch.unique(iis), upmask)
-
+                    if self.upsample: ##
+                        self.video.upsample(torch.unique(iis), upmask)
+                        
+#                     msk = self.video.masks[iis] > 0
+                    msk = self.video.masks_small[iis] > 0
+                    weight[:,msk] = 0.0
+                    ##
+                    
                 self.net[:,v] = net
                 self.target[:,v] = coords1[:,v] + delta.float()
                 self.weight[:,v] = weight.float()

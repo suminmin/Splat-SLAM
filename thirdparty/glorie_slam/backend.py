@@ -36,16 +36,22 @@ class Backend:
         self.backend_loop_thresh = cfg['tracking']['backend']['loop_thresh']
         self.backend_loop_radius = cfg['tracking']['backend']['loop_radius']
         self.backend_loop_nms = cfg['tracking']['backend']['loop_nms']
+        
+        self.upsample = cfg["tracking"]["upsample"] if "upsample" in cfg["tracking"] else False ##
 
     @torch.no_grad()
-    def ba(self, t_start, t_end, steps, graph, nms, radius, thresh, max_factors, t_start_loop=None, loop=False, motion_only=False, enable_wq=True):
+    def ba(self, t_start, t_end, steps, graph, nms, radius, thresh, max_factors, 
+           t_start_loop=None, loop=False, motion_only=False, enable_wq=True,
+           clear_graph_edges=True):
         """ main update """
         if t_start_loop is None or not loop:
             t_start_loop = t_start
         assert t_start_loop >= t_start, f'short: {t_start_loop}, long: {t_start}.'
         edge_num = graph.add_backend_proximity_factors(t_start,t_end,nms,radius,thresh,max_factors,self.beta, t_start_loop,loop)
         if edge_num == 0:
-            graph.clear_edges()
+#             graph.clear_edges()
+            if clear_graph_edges: ##
+                graph.clear_edges()
             return 0
         
         graph.update_lowmem(
@@ -57,11 +63,13 @@ class Backend:
             enable_wq = enable_wq
         )
 
-        graph.clear_edges()
+        if clear_graph_edges:
+            graph.clear_edges()
         return edge_num
 
     @torch.no_grad()
-    def dense_ba(self, steps=6, enable_wq=True):
+#     def dense_ba(self, steps=6, enable_wq=True):
+    def dense_ba(self, steps=6, enable_wq=True, graph_save_path=None):
         t_start = 0
         t_end = self.video.counter.value
         nms = self.backend_nms
@@ -74,8 +82,14 @@ class Backend:
         graph = FactorGraph(self.video, self.update_op, device=self.device, 
                             corr_impl='alt', max_factors=max_factors)
         n_edges = self.ba(t_start, t_end, steps, graph, nms, radius, 
-                          thresh, max_factors, motion_only=False, enable_wq=enable_wq)
+                          thresh, max_factors, motion_only=False, enable_wq=enable_wq, 
+                          clear_graph_edges=False) ##
 
+        if graph_save_path is not None:
+            graph.save_factors(graph_save_path)
+        
+        graph.clear_edges() ##
+        
         del graph
         torch.cuda.empty_cache()
         self.video.set_dirty(t_start,t_end)
@@ -94,7 +108,7 @@ class Backend:
         thresh = self.backend_loop_thresh
         t_start_loop = max(0, t_end - window)
 
-        graph = FactorGraph(self.video, self.update_op, device=self.device, corr_impl='alt', max_factors=max_factors)
+        graph = FactorGraph(self.video, self.update_op, device=self.device, corr_impl='alt', max_factors=max_factors, upsample=self.upsample)
         if local_graph is not None:
             copy_attr = ['ii', 'jj', 'age', 'net', 'target', 'weight']
             for key in copy_attr:

@@ -16,3 +16,11 @@ wandb
 cull_replica_mesh
 *.egg*
 euler/
+
+datasets/*
+output/*
+notebooks/*
+.ipynb_checkpoints/*
+*/.ipynb_checkpoints/*
+configs/EMDB/*
+# configs/KITTI/*

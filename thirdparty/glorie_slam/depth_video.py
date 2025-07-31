@@ -59,7 +59,11 @@ class DepthVideo:
         self.depth_shift = torch.zeros(buffer,device=self.device, dtype=torch.float).share_memory_()
         self.valid_depth_mask = torch.zeros(buffer, ht, wd, device=self.device, dtype=torch.bool).share_memory_()
         self.valid_depth_mask_small = torch.zeros(buffer, ht//self.down_scale, wd//self.down_scale, device=self.device, dtype=torch.bool).share_memory_()        
-
+#         self.masks = torch.zeros(buffer, ht, wd, device="cuda", dtype=torch.float).share_memory_()
+#         self.masks_small = torch.zeros(buffer, ht//self.down_scale, wd//self.down_scale, device="cuda", dtype=torch.float).share_memory_() ##
+        self.masks = torch.zeros(buffer, ht, wd, device="cuda", dtype=torch.bool).share_memory_()
+        self.masks_small = torch.zeros(buffer, ht//self.down_scale, wd//self.down_scale, device="cuda", dtype=torch.bool).share_memory_() ##
+        
         ### feature attributes ###
         self.fmaps = torch.zeros(buffer, 1, 128, ht//self.down_scale, wd//self.down_scale, dtype=torch.half, device=self.device).share_memory_()
         self.nets = torch.zeros(buffer, 128, ht//self.down_scale, wd//self.down_scale, dtype=torch.half, device=self.device).share_memory_()
@@ -106,6 +110,12 @@ class DepthVideo:
 
         if len(item) > 8:
             self.inps[index] = item[8]
+            
+        ##
+        if len(item) > 9:
+            self.masks_small[index] = item[9]
+        if len(item) > 10:
+            self.masks[index] = item[10]
 
     def __setitem__(self, index, item):
         with self.get_lock():
@@ -125,7 +135,9 @@ class DepthVideo:
                 self.intrinsics[index],
                 self.fmaps[index],
                 self.nets[index],
-                self.inps[index])
+                self.inps[index],
+                self.masks_small[index],
+                self.masks[index])
 
         return item
 
@@ -337,8 +349,32 @@ class DepthVideo:
             c2w = self.get_pose(index,device)
         return est_depth, depth_mask, c2w
     
+    def get_depth_and_pose_w_mask(self,index,device):
+        with self.get_lock():
+            est_disp = self.disps_up[index].clone().to(device)  # [h, w]
+            est_depth = 1.0 / (est_disp)
+            depth_mask = self.valid_depth_mask[index].clone().to(device)
+            c2w = self.get_pose(index,device)
+            mask_small = self.masks_small[index].clone().to(device)
+        return est_depth, depth_mask, c2w, mask_small
+    
+    def get_valid_depth_mask_small(self,index,device):
+        with self.get_lock():
+            depth_mask = self.valid_depth_mask_small[index].clone().to(device)
+        return depth_mask
+    
+    def get_mask(self, index, device):
+        with self.get_lock():
+            mask = self.masks[index].clone().to(device)  # [h, w]
+        return mask
+    
+    def get_mask_small(self, index, device):
+        with self.get_lock():
+            mask_small = self.masks_small[index].clone().to(device)
+        return mask_small
+    
     @torch.no_grad()
-    def update_valid_depth_mask(self,up=True):
+    def update_valid_depth_mask(self, up=True):
         '''
         For each pixel, check whether the estimated depth value is valid or not 
         by the two-view consistency check, see eq.4 ~ eq.7 in the paper for details
@@ -368,10 +404,15 @@ class DepthVideo:
         depths_reshape = depths.view(depths.shape[0],-1)
         depths_median = depths_reshape.nanmedian(dim=1).values
         masks = depths < 3*depths_median[:,None,None]
+        
         if up:
+            masks = masks & ~self.masks[dirty_index] ## add dynamic mask
+            
             self.valid_depth_mask[dirty_index] = masks 
             self.dirty[dirty_index] = False
         else:
+            masks = masks & ~self.masks_small[dirty_index] ## add dynamic mask
+            
             self.valid_depth_mask_small[dirty_index] = masks 
 
     def set_dirty(self,index_start, index_end):
@@ -383,18 +424,37 @@ class DepthVideo:
         depths = []
         timestamps = []
         valid_depth_masks = []
+        valid_depth_masks_small = []
+        masks = []
+        masks_small = []
         for i in range(self.counter.value):
             depth, depth_mask, pose = self.get_depth_and_pose(i,'cpu')
+            depth_mask_small = self.get_valid_depth_mask_small(i,'cpu')
+            mask = self.get_mask(i, 'cpu')
+            mask_small = self.get_mask_small(i, 'cpu')
             timestamp = self.timestamp[i].cpu()
             poses.append(pose)
             depths.append(depth)
             timestamps.append(timestamp)
             valid_depth_masks.append(depth_mask)
+            valid_depth_masks_small.append(depth_mask_small)
+            masks.append(mask)
+            masks_small.append(mask_small)
         poses = torch.stack(poses,dim=0).numpy()
         depths = torch.stack(depths,dim=0).numpy()
         timestamps = torch.stack(timestamps,dim=0).numpy() 
-        valid_depth_masks = torch.stack(valid_depth_masks,dim=0).numpy()       
-        np.savez(path,poses=poses,depths=depths,timestamps=timestamps,valid_depth_masks=valid_depth_masks)
+        valid_depth_masks = torch.stack(valid_depth_masks,dim=0).numpy()
+        valid_depth_masks_small = torch.stack(valid_depth_masks_small,dim=0).numpy()
+        masks = torch.stack(masks,dim=0).numpy()       
+        masks_small = torch.stack(masks_small,dim=0).numpy()       
+        np.savez(path,
+                 poses=poses,
+                 depths=depths,
+                 timestamps=timestamps,
+                 valid_depth_masks=valid_depth_masks, 
+                 valid_depth_masks_small=valid_depth_masks_small, 
+                 masks=masks, 
+                 masks_small=masks_small)
         self.printer.print(f"Saved final depth video: {path}",FontColor.INFO)
 
 
@@ -411,6 +471,11 @@ class DepthVideo:
         for i in range(video_timestamps.shape[0]):
             timestamp = int(video_timestamps[i])
             mask = self.valid_depth_mask[i]
+            
+            img_mask = self.masks[i] ## 
+#             mask = mask * img_mask.float() ##
+            mask = mask & img_mask ##
+            
             if mask.sum() == 0:
                 print("WARNING: mask is empty!")
             mask_list.append((mask.sum()/(mask.shape[0]*mask.shape[1])).cpu().numpy())

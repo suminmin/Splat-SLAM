@@ -27,9 +27,13 @@ from src.utils.Printer import Printer,FontColor
 from src.utils.eval_traj import kf_traj_eval,full_traj_eval
 from src.utils.eval_utils import eval_rendering
 from src.utils.datasets import BaseDataset
-from src.tracker import Tracker
-from src.mapper import Mapper
+# from src.tracker import Tracker
+from src.tracker_masked import Tracker
+# from src.mapper import Mapper
+from src.mapper_masked import Mapper
 from thirdparty.glorie_slam.backend import Backend
+
+from evo.tools import plot
 
 class SLAM:
     def __init__(self, cfg, stream:BaseDataset):
@@ -96,6 +100,12 @@ class SLAM:
         self.printer.pbar_ready()
         self.tracker.run(self.stream)
         self.printer.print('Tracking Done!',FontColor.TRACKER)
+        
+        ## without lock
+        self.tracker.frontend.graph.save_factors(f"{self.save_dir}/frontend_graph.pt")
+        self.tracker.frontend.graph.video.save_video(f"{self.save_dir}/frontend_video.npz")
+        ##
+        
         if self.only_tracking:
             self.terminate()
     
@@ -123,12 +133,16 @@ class SLAM:
         torch.cuda.empty_cache()
         self.ba.dense_ba(7)
         torch.cuda.empty_cache()
-        self.ba.dense_ba(12)
+#         self.ba.dense_ba(12)
+        self.ba.dense_ba(12, graph_save_path=f"{self.save_dir}/backend_final-ba_graph.pt")
+        self.ba.video.save_video(f"{self.save_dir}/backend_final-ba_video.npz")
         self.printer.print("Final Global BA Done!",FontColor.TRACKER)
 
 
     def terminate(self):
         """ fill poses for non-keyframe images and evaluate """
+        
+        plot_axis = eval(f"plot.PlotMode.{self.cfg['plot']['plot_axis']}") if "plot" in self.cfg.keys() else plot.PlotMode.xy
         
         if self.cfg['tracking']['backend']['final_ba'] and self.cfg['mapping']['eval_before_final_ba']:
             self.video.save_video(f"{self.save_dir}/video.npz")
@@ -136,7 +150,8 @@ class SLAM:
                 ate_statistics, global_scale, r_a, t_a = kf_traj_eval(
                     f"{self.save_dir}/video.npz",
                     f"{self.save_dir}/traj",
-                    "kf_traj",self.stream,self.logger,self.printer)
+                    "kf_traj", self.stream, self.logger, self.printer,
+                    plot_axis=plot_axis)
             except Exception as e:
                 self.printer.print(e,FontColor.ERROR)
 
@@ -171,7 +186,8 @@ class SLAM:
             ate_statistics, global_scale, r_a, t_a = kf_traj_eval(
                 f"{self.save_dir}/video.npz",
                 f"{self.save_dir}/traj",
-                "kf_traj",self.stream,self.logger,self.printer)
+                "kf_traj", self.stream, self.logger, self.printer,
+                plot_axis=plot_axis)
         except Exception as e:
             self.printer.print(e,FontColor.ERROR)
 
@@ -180,6 +196,11 @@ class SLAM:
                 # The final refine method includes the final update of the poses and depths
                 self.mapper.final_refine(iters=self.cfg["mapping"]["final_refine_iters"]) # this performs a set of optimizations with RGBD loss to correct
 
+            ##
+#             self.mapper.gaussians.save_ply(f"{self.save_dir}/final_gaussians.ply", scene_scale=0.1)
+            self.mapper.gaussians.save_ply(f"{self.save_dir}/final_gaussians.ply")
+            ##
+        
             # prepare aligned camera list of mapped frames
             traj_est_aligned = []
             cams = self.mapper.cameras
@@ -236,14 +257,19 @@ class SLAM:
                     file.write(f'{label}: {number}\n')
 
             self.printer.print(f'File saved as {file_path}',FontColor.EVAL)
-
-        full_traj_eval(self.traj_filler,
-                       f"{self.save_dir}/traj",
-                       "full_traj",
-                       self.stream, self.logger, self.printer)
         
-        ##
-        self.mapper.gaussians.save_ply(f"{self.save_dir}/final_gaussians.ply")
+        #    
+        traj_est_not_align, traj_est, traj_erf = full_traj_eval(self.traj_filler,
+                                                               f"{self.save_dir}/traj",
+                                                               "full_traj",
+                                                               self.stream, self.logger, self.printer)
+        
+#         pose_xyz_qwxyz = np.concatenate([traj_est_not_align.timestamps[:, np.newaxis], 
+#                                          traj_est_not_align.positions_xyz, 
+#                                          traj_est_not_align.orientations_quat_wxyz], axis=1)
+#         pose_xyz_qwxyz = np.concatenate([traj_est_not_align.positions_xyz, 
+#                                          traj_est_not_align.orientations_quat_wxyz], axis=1)
+        np.save(f"{self.save_dir}/traj/traj_est_not_align.npy", traj_est_not_align)
 
         self.printer.print("Metrics Evaluation Done!",FontColor.EVAL)
 

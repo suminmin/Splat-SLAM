@@ -43,12 +43,15 @@ class Frontend:
 
         self.enable_loop = cfg['tracking']['frontend']['enable_loop']
         self.loop_closing = LoopClosing(net, video, cfg)
+        
+        self.upsample = cfg["tracking"]["upsample"] if "upsample" in cfg["tracking"] else False ##
 
         self.graph = FactorGraph(
             video, net.update,
             device=cfg['device'],
             corr_impl='volume',
-            max_factors=self.frontend_max_factors
+            max_factors=self.frontend_max_factors,
+            upsample=self.upsample
         )
 
     def __update(self):
@@ -71,13 +74,15 @@ class Frontend:
 
 
         if d.item() < self.keyframe_thresh:
-            self.graph.rm_keyframe(self.t1 - 1)            
+            self.graph.rm_keyframe(self.t1 - 1)      
+#             self.graph.rm_keyframe(self.t1 - 2) ##             
             with self.video.get_lock():
                 self.video.counter.value -= 1
                 self.t1 -= 1
         else:
             cur_t = self.video.counter.value
             if self.enable_loop and cur_t > self.frontend_window:
+                print("Perform loop_ba", self.graph.ii)
                 n_kf, n_edge = self.loop_closing.loop_ba(t_start=0, t_end=cur_t, steps=self.iters2, 
                                                          motion_only=False, local_graph=self.graph,
                                                          enable_wq=True)
@@ -96,6 +101,7 @@ class Frontend:
         self.video.disps[self.t1] = self.video.disps[self.t1-1].mean()
 
         # update visualization
+        print(self.graph.ii, self.t1)
         self.video.set_dirty(self.graph.ii.min(), self.t1)
         torch.cuda.empty_cache()
 

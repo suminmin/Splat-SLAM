@@ -18,7 +18,7 @@ from plyfile import PlyData, PlyElement
 from simple_knn._C import distCUDA2
 from torch import nn
 
-from gaussian_splatting.utils.general_utils import (
+from thirdparty.gaussian_splatting.utils.general_utils import (
     build_rotation,
     build_scaling_rotation,
     get_expon_lr_func,
@@ -26,9 +26,9 @@ from gaussian_splatting.utils.general_utils import (
     inverse_sigmoid,
     strip_symmetric,
 )
-from gaussian_splatting.utils.graphics_utils import BasicPointCloud, getWorld2View2
-from gaussian_splatting.utils.sh_utils import RGB2SH
-from gaussian_splatting.utils.system_utils import mkdir_p
+from thirdparty.gaussian_splatting.utils.graphics_utils import BasicPointCloud, getWorld2View2
+from thirdparty.gaussian_splatting.utils.sh_utils import RGB2SH
+from thirdparty.gaussian_splatting.utils.system_utils import mkdir_p
 
 
 class GaussianModel:
@@ -342,10 +342,11 @@ class GaussianModel:
             l.append("rot_{}".format(i))
         return l
 
-    def save_ply(self, path):
+    def save_ply(self, path, scene_scale=1.0):
         mkdir_p(os.path.dirname(path))
 
-        xyz = self._xyz.detach().cpu().numpy()
+#         xyz = self._xyz.detach().cpu().numpy()
+        xyz = self._xyz.detach().cpu().numpy() * scene_scale
         print("Nbr Gaussians: ", xyz.shape)
         normals = np.zeros_like(xyz)
         f_dc = (
@@ -365,7 +366,8 @@ class GaussianModel:
             .numpy()
         )
         opacities = self._opacity.detach().cpu().numpy()
-        scale = self._scaling.detach().cpu().numpy()
+#         scale = self._scaling.detach().cpu().numpy()
+        scale = self._scaling.detach().cpu().numpy() * scene_scale
         rotation = self._rotation.detach().cpu().numpy()
 
         dtype_full = [

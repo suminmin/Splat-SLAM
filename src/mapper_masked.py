@@ -25,7 +25,9 @@ from multiprocessing.connection import Connection
 from munch import munchify
 
 # from src.utils.datasets import get_dataset, load_mono_depth
-from src.utils.emdb_dataset import get_dataset
+# from src.utils.emdb_dataset import get_dataset
+# from src.utils.emdb_dataset_masked import get_dataset
+from src.utils.get_dataset import get_dataset
 from src.utils.datasets import load_mono_depth
 from src.utils.common import as_intrinsics_matrix, setup_seed
 
@@ -258,6 +260,7 @@ class Mapper(object):
 
 
     def get_w2c_and_depth(self, video_idx, idx, mono_depth, print_info=False, init=False):
+#         est_droid_depth, valid_depth_mask, c2w = self.video.get_depth_and_pose(video_idx,self.device)
         est_droid_depth, valid_depth_mask, c2w = self.video.get_depth_and_pose(video_idx,self.device)
         c2w = c2w.to(self.device)
         w2c = torch.linalg.inv(c2w)
@@ -377,6 +380,8 @@ class Mapper(object):
             )
             gt_image = viewpoint.original_image
             gt_depth = viewpoint.depth
+            
+            color_mask = viewpoint.mask
 
             image = torch.clamp(image, 0.0, 1.0)
             gt = (gt_image.cpu().numpy().transpose((1, 2, 0)) * 255).astype(np.uint8)
@@ -386,6 +391,9 @@ class Mapper(object):
             gt = cv2.cvtColor(gt, cv2.COLOR_BGR2RGB)
             pred = cv2.cvtColor(pred, cv2.COLOR_BGR2RGB)
             mask = gt_image > 0
+            if color_mask is not None:
+#                 mask = torch.logical_and(mask, color_mask > 0.5)
+                mask = torch.logical_and(mask, color_mask) # binary
             psnr_score = psnr((image[mask]).unsqueeze(0), (gt_image[mask]).unsqueeze(0))
             diff_depth_l1 = torch.abs(depth.detach().cpu() - gt_depth)
             diff_depth_l1 = diff_depth_l1 * (gt_depth > 0)
@@ -590,6 +598,8 @@ class Mapper(object):
             gt_image = viewpoint.original_image
             gt_depth = viewpoint.depth 
 
+            color_mask = viewpoint.mask
+            
             if viewpoint.uid != self.video_idxs[0]: # first mapping frame is reference for exposure
                 image = (torch.exp(viewpoint.exposure_a.detach())) * image + viewpoint.exposure_b.detach()
 
@@ -602,6 +612,8 @@ class Mapper(object):
             gt = cv2.cvtColor(gt, cv2.COLOR_BGR2RGB)
             pred = cv2.cvtColor(pred, cv2.COLOR_BGR2RGB)
             mask = gt_image > 0
+            if color_mask is not None:
+                mask = torch.logical_and(mask, color_mask > 0.5)
             psnr_score = psnr((image[mask]).unsqueeze(0), (gt_image[mask]).unsqueeze(0))
             diff_depth_l1 = torch.abs(depth.detach().cpu() - gt_depth)
             diff_depth_l1 = diff_depth_l1 * (gt_depth > 0)
@@ -736,6 +748,10 @@ class Mapper(object):
         # Filter out RGB pixels where the R + G + B values < 0.01
         # valid_rgb = (gt_img.sum(dim=0) > rgb_boundary_threshold)[None]
         valid_rgb = (gt_img.sum(dim=0) > -1)[None]
+        
+        color_mask = viewpoint.mask
+        if color_mask is not None:
+            valid_rgb = torch.logical_and(valid_rgb, color_mask > 0.5)
 
         # use the observed depth
         initial_depth = torch.from_numpy(viewpoint.depth).unsqueeze(0)
@@ -866,7 +882,8 @@ class Mapper(object):
         init = True
 
         # Define first frame pose
-        _, color, _, first_frame_c2w = self.frame_reader[0]
+#         _, color, _, first_frame_c2w = self.frame_reader[0]
+        _, color, _, first_frame_c2w, mask = self.frame_reader[0]
         intrinsics = as_intrinsics_matrix(self.frame_reader.get_intrinsic()).to(self.device)
 
         # Create dictionary which stores the depth maps from the previous iteration
@@ -899,20 +916,25 @@ class Mapper(object):
             self.video_idxs.append(video_idx)
 
 
-            _, color, _, c2w_gt = self.frame_reader[idx]
+#             _, color, _, c2w_gt = self.frame_reader[idx]
+            _, color, _, c2w_gt, mask = self.frame_reader[idx]
             mono_depth = load_mono_depth(idx, self.save_dir).to(self.device)
             color = color.to(self.device)
             c2w_gt = c2w_gt.to(self.device) 
+            mask = mask.to(self.device)
 
             depth, w2c, invalid = self.get_w2c_and_depth(video_idx, idx, mono_depth, init=False)
 
+            w2c_gt = torch.linalg.inv(c2w_gt)
+            
             if invalid:
                 print("WARNING: Too few valid pixels from droid depth")
                  # online glorieslam pose and depth
                 data = {"gt_color": color.squeeze(), 
                         "glorie_depth": depth.cpu().numpy(), 
                         "glorie_pose": w2c,
-                        "gt_pose": w2c_gt, 
+                        "gt_pose": w2c_gt,
+                        "mask": mask.squeeze(),
                         "idx": video_idx}
                 self.is_kf[video_idx] = False
                 viewpoint = Camera.init_from_dataset(
@@ -927,7 +949,7 @@ class Mapper(object):
                 self.pipe.send("continue")
                 continue # too few valid pixels from droid depth
 
-            w2c_gt = torch.linalg.inv(c2w_gt)
+#             w2c_gt = torch.linalg.inv(c2w_gt)
             self.gt_w2c_all_frames.append(w2c_gt)
             
 
@@ -936,6 +958,7 @@ class Mapper(object):
                     "glorie_depth": depth.cpu().numpy(), 
                     "glorie_pose": w2c,
                     "gt_pose": w2c_gt, 
+                    "mask": mask.squeeze(), 
                     "idx": video_idx}
 
             viewpoint = Camera.init_from_dataset(

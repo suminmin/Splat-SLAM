@@ -58,7 +58,7 @@ class MotionFilter:
 
     @torch.cuda.amp.autocast(enabled=True)
     @torch.no_grad()
-    def track(self, tstamp, image, intrinsics=None):
+    def track(self, tstamp, image, intrinsics=None, mask_small=None, mask=None):
         """ main update operation - run on every frame in video """
 
         Id = lietorch.SE3.Identity(1,).data.squeeze()
@@ -71,6 +71,12 @@ class MotionFilter:
 
         # extract features
         gmap = self.__feature_encoder(inputs)
+        if mask_small is None:
+            mask_small = torch.zeros([image.shape[-2], image.shape[-1]]).to(gmap)
+#             mask_small = torch.ones([image.shape[-2], image.shape[-1]], dtype=torch.bool).to(gmap)
+        if mask is None:
+            mask = torch.zeros([ht, wd]).to(gmap)
+#             mask = torch.ones([ht, wd], dtype=torch.bool).to(gmap)
 
         ### always add first frame to the depth video ###
         if self.video.counter.value == 0:
@@ -80,7 +86,8 @@ class MotionFilter:
                 mono_depth = predict_mono_depth(self.mono_depth_estimator,tstamp,image,self.cfg,self.device)
             else:
                 mono_depth = load_mono_depth(tstamp,self.cfg)
-            self.video.append(tstamp, image[0], Id, 1.0, mono_depth, intrinsics / float(self.video.down_scale), gmap, net[0,0], inp[0,0])
+#             self.video.append(tstamp, image[0], Id, 1.0, mono_depth, intrinsics / float(self.video.down_scale), gmap, net[0,0], inp[0,0])
+            self.video.append(tstamp, image[0], Id, 1.0, mono_depth, intrinsics / float(self.video.down_scale), gmap, net[0,0], inp[0,0], mask_small, mask) ##
         ### only add new frame if there is enough motion ###
         else:                
             # index correlation volume
@@ -99,7 +106,8 @@ class MotionFilter:
                     mono_depth = predict_mono_depth(self.mono_depth_estimator,tstamp,image,self.cfg,self.device)
                 else:
                     mono_depth = load_mono_depth(tstamp,self.cfg)
-                self.video.append(tstamp, image[0], None, None, mono_depth, intrinsics / float(self.video.down_scale), gmap, net[0], inp[0])
+#                 self.video.append(tstamp, image[0], None, None, mono_depth, intrinsics / float(self.video.down_scale), gmap, net[0], inp[0])
+                self.video.append(tstamp, image[0], None, None, mono_depth, intrinsics / float(self.video.down_scale), gmap, net[0], inp[0], mask_small, mask) ##
 
             else:
                 self.count += 1
