@@ -1,7 +1,7 @@
 # Masked Splat-SLAM
 
 ## Example result in KITTI
-<img src="output/KITTI/2011_09_26_drive_0091_sync/plots_after_refine/output.gif" alt="KITTI/" width="800" height="150">
+<img src="docs/output.gif" alt="KITTI/" width="800" height="150">
 
 ## Preliminary
 You need to prepare mask images for given datasets.
